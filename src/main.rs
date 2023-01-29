@@ -190,6 +190,7 @@ struct Quote {
 }
 
 #[command]
+#[description = "Return a quote from the hord based on the quote's id"]
 async fn quoteid(ctx: &Context, msg: &Message, args: Args) -> CommandResult {
     let start = Instant::now();
 
@@ -245,6 +246,7 @@ async fn quoteid(ctx: &Context, msg: &Message, args: Args) -> CommandResult {
 }
 
 #[command]
+#[description = "Returns a quote from the hord. No argument returns a random quote."]
 async fn quote(ctx: &Context, msg: &Message, args: Args) -> CommandResult {
     let start = Instant::now();
 
