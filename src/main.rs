@@ -226,13 +226,22 @@ async fn quote(ctx: &Context, msg: &Message, args: Args) -> CommandResult {
 
         let duration = start.elapsed();
 
-        format!(
-            "{}\n\n*Submitted by {} [{:.2} {:.2}ms]*",
-            quote,
-            submitter,
-            score,
-            duration.as_micros() as f32 / 1000.0,
-        )
+        if submitter != "" {
+            format!(
+                "{}\n\n*Submitted by {} [{:.2} {:.2}ms]*",
+                quote,
+                submitter,
+                score,
+                duration.as_micros() as f32 / 1000.0,
+            )
+        } else {
+            format!(
+                "{}\n\n*[{:.2} {:.2}ms]*",
+                quote,
+                score,
+                duration.as_micros() as f32 / 1000.0,
+            )
+        }
     } else {
         "No quote found.".to_string()
     };
