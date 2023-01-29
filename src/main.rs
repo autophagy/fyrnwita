@@ -1,5 +1,3 @@
-use rand::seq::SliceRandom;
-use rand::Rng;
 use std::collections::HashSet;
 use std::env;
 
@@ -13,14 +11,12 @@ use serenity::model::channel::Message;
 use serenity::model::gateway::{GatewayIntents, Ready};
 use serenity::model::id::UserId;
 use serenity::prelude::*;
-use std::sync::Arc;
 
 use std::time::Instant;
-use tantivy::collector::TopDocs;
-use tantivy::query::QueryParser;
-use tantivy::schema::*;
-use tantivy::{DocId, Index, IndexReader, ReloadPolicy, SegmentReader};
-use time::format_description;
+use time::{format_description, OffsetDateTime};
+
+use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
+use sqlx::{Pool, Sqlite};
 
 struct Handler;
 
@@ -31,14 +27,10 @@ impl EventHandler for Handler {
     }
 }
 
-struct Queryer {
-    parser: QueryParser,
-    reader: IndexReader,
-    schema: Schema,
-}
+struct SqlitePool;
 
-impl TypeMapKey for Queryer {
-    type Value = Arc<Queryer>;
+impl TypeMapKey for SqlitePool {
+    type Value = Pool<Sqlite>;
 }
 
 #[group]
@@ -102,34 +94,17 @@ async fn dispatch_error(ctx: &Context, msg: &Message, error: DispatchError, _com
 
 #[tokio::main]
 async fn main() {
-    let index_path = env::var("FW_INDEX").expect("Expected a path to Tantivy index in env");
-    let index = Index::open_in_dir(&index_path).unwrap();
-    let reader = index
-        .reader_builder()
-        .reload_policy(ReloadPolicy::OnCommit)
-        .try_into()
+    let db_path = env::var("FW_DB").expect("Expected a path to Sqlite3 DB as $FW_DB");
+
+    let opts = SqliteConnectOptions::new()
+        .filename(db_path)
+        .journal_mode(SqliteJournalMode::Delete);
+
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(opts)
+        .await
         .unwrap();
-
-    let schema = index.schema();
-
-    let default_fields: Vec<Field> = schema
-        .fields()
-        .filter(|&(_, field_entry)| match field_entry.field_type() {
-            FieldType::Str(ref text_field_options) => {
-                text_field_options.get_indexing_options().is_some()
-            }
-            _ => false,
-        })
-        .map(|(field, _)| field)
-        .collect();
-
-    let parser = QueryParser::new(schema.clone(), default_fields, index.tokenizers().clone());
-
-    let queryer = Queryer {
-        parser,
-        reader,
-        schema,
-    };
 
     let token = env::var("DISCORD_TOKEN").expect("Expected a token in the environment");
 
@@ -170,11 +145,10 @@ async fn main() {
         .expect("Err creating client");
 
     {
-        // Open the data lock in write mode, so keys can be inserted to it.
         let mut data = client.data.write().await;
-
-        data.insert::<Queryer>(Arc::new(queryer));
+        data.insert::<SqlitePool>(pool);
     }
+
     if let Err(why) = client.start().await {
         println!("Client error: {:?}", why);
     }
@@ -202,93 +176,82 @@ async fn slap(ctx: &Context, msg: &Message, args: Args) -> CommandResult {
     Ok(())
 }
 
+#[derive(Debug, sqlx::FromRow)]
+struct Quote {
+    id: i32,
+    quote: String,
+    submitter: String,
+    submitted: Option<OffsetDateTime>,
+}
+
 #[command]
 async fn quote(ctx: &Context, msg: &Message, args: Args) -> CommandResult {
     let start = Instant::now();
 
-    let queryer = {
+    let pool = {
         let data_read = ctx.data.read().await;
         data_read
-            .get::<Queryer>()
-            .expect("Expected queryer")
+            .get::<SqlitePool>()
+            .expect("Expected an SqlitePool in TypeMap")
             .clone()
     };
 
-    let parser = &queryer.parser;
-    let reader = &queryer.reader;
-    let schema = &queryer.schema;
-
-    let searcher = &reader.searcher();
-
-    let quote = schema.get_field("quote").unwrap();
-    let submitter = schema.get_field("submitter").unwrap();
-    let submitted = schema.get_field("submitted").unwrap();
-
-    let top_docs = if args.rest().trim() == "" {
-        let query = parser.parse_query("*")?;
-        searcher.search(
-            &query,
-            &TopDocs::with_limit(1).custom_score(move |_: &SegmentReader| {
-                move |_: DocId| {
-                    let mut rng = rand::thread_rng();
-                    rng.gen::<f32>()
-                }
-            }),
-        )?
+    let query_result = if args.rest().trim() == "" {
+        let stmt = "SELECT id, quote, submitter, submitted FROM quotes ORDER BY RANDOM() LIMIT 1";
+        sqlx::query_as::<_, Quote>(stmt).fetch_one(&pool).await
     } else {
-        let query = parser.parse_query(&format!("quote:\"{}\"", args.rest()))?;
-        searcher.search(&query, &TopDocs::with_limit(5))?
+        let stmt = "SELECT quotes.id, highlight(quotes_fts,0,'**','**') quote, quotes.submitter, quotes.submitted FROM quotes_fts INNER JOIN quotes ON quotes_fts.rowid=quotes.id WHERE quotes_fts MATCH ? ORDER BY RANDOM() LIMIT 1";
+        sqlx::query_as::<_, Quote>(stmt)
+            .bind(args.rest().trim())
+            .fetch_one(&pool)
+            .await
     };
 
-    let message = if let Some((score, doc_address)) = top_docs.choose(&mut rand::thread_rng()) {
-        let retrieved_doc = searcher.doc(*doc_address)?;
-        let quote = get_str_with_default(retrieved_doc.get_first(quote), "");
-        let submitter = get_str_with_default(retrieved_doc.get_first(submitter), "");
-        let submitted = get_date_with_default(retrieved_doc.get_first(submitted), "N/A");
+    let duration = start.elapsed();
 
-        let duration = start.elapsed();
+    match query_result {
+        Ok(quote) => {
+            let reply = if !quote.submitter.is_empty() {
+                format!(
+                    "[{}] {}\n\n*Submitted by {} on {} [{:.2}ms]*",
+                    quote.id,
+                    quote.quote,
+                    quote.submitter,
+                    get_date_with_default(&quote.submitted, "N/A"),
+                    duration.as_micros() as f32 / 1000.0,
+                )
+            } else {
+                format!(
+                    "[{}] {}\n\n*Submitted on {} [{:.2}ms]*",
+                    quote.id,
+                    quote.quote,
+                    get_date_with_default(&quote.submitted, "N/A"),
+                    duration.as_micros() as f32 / 1000.0,
+                )
+            };
 
-        if !submitter.is_empty() {
-            format!(
-                "{}\n\n*Submitted by {} on {} [{:.2} {:.2}ms]*",
-                quote,
-                submitter,
-                submitted,
-                score,
-                duration.as_micros() as f32 / 1000.0,
-            )
-        } else {
-            format!(
-                "{}\n\n*Submitted on {} [{:.2} {:.2}ms]*",
-                quote,
-                submitted,
-                score,
-                duration.as_micros() as f32 / 1000.0,
-            )
+            msg.reply(&ctx.http, reply).await?;
         }
-    } else {
-        "No quote found.".to_string()
+        Err(sqlx::Error::RowNotFound) => {
+            msg.reply(&ctx.http, "No quote found.").await?;
+        }
+        Err(_) => {
+            msg.reply(&ctx.http, "Querying error.").await?;
+        }
     };
-    msg.reply(&ctx.http, message).await?;
 
     Ok(())
 }
 
-pub fn get_str_with_default<'a>(value: Option<&'a Value>, default: &'a str) -> &'a str {
-    if let Value::Str(i) = value.unwrap() {
-        i
-    } else {
-        default
-    }
-}
-
-pub fn get_date_with_default<'a>(value: Option<&'a Value>, default: &'a str) -> String {
-    if let Value::Date(i) = value.unwrap() {
-        let format =
-            format_description::parse("[month repr:short] [day] [year] [hour]:[minute]:[second]")
-                .unwrap();
-        i.into_utc().format(&format).unwrap()
-    } else {
-        default.to_string()
+pub fn get_date_with_default<'a>(value: &'a Option<OffsetDateTime>, default: &'a str) -> String {
+    match value {
+        Some(d) => {
+            let format = format_description::parse(
+                "[month repr:short] [day] [year] [hour]:[minute]:[second]",
+            )
+            .unwrap();
+            d.format(&format).unwrap()
+        }
+        None => default.to_string(),
     }
 }
