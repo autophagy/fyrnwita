@@ -1,4 +1,5 @@
-use rand::seq::SliceRandom; // 0.7.2
+use rand::seq::SliceRandom;
+use rand::Rng;
 use std::collections::HashSet;
 use std::env;
 
@@ -18,7 +19,7 @@ use std::time::Instant;
 use tantivy::collector::TopDocs;
 use tantivy::query::QueryParser;
 use tantivy::schema::*;
-use tantivy::{Index, IndexReader, ReloadPolicy};
+use tantivy::{DocId, Index, IndexReader, ReloadPolicy, SegmentReader};
 use time::format_description;
 
 struct Handler;
@@ -108,15 +109,21 @@ async fn main() {
         .reload_policy(ReloadPolicy::OnCommit)
         .try_into()
         .unwrap();
-    let mut schema_builder = Schema::builder();
 
-    schema_builder.add_text_field("quote", TEXT | STORED | FAST);
-    schema_builder.add_text_field("submitter", TEXT | STORED);
-    schema_builder.add_date_field("submitted", STORED);
+    let schema = index.schema();
 
-    let schema = schema_builder.build();
+    let default_fields: Vec<Field> = schema
+        .fields()
+        .filter(|&(_, field_entry)| match field_entry.field_type() {
+            FieldType::Str(ref text_field_options) => {
+                text_field_options.get_indexing_options().is_some()
+            }
+            _ => false,
+        })
+        .map(|(field, _)| field)
+        .collect();
 
-    let parser = QueryParser::for_index(&index, vec![schema.get_field("quote").unwrap()]);
+    let parser = QueryParser::new(schema.clone(), default_fields, index.tokenizers().clone());
 
     let queryer = Queryer {
         parser,
@@ -217,9 +224,21 @@ async fn quote(ctx: &Context, msg: &Message, args: Args) -> CommandResult {
     let submitter = schema.get_field("submitter").unwrap();
     let submitted = schema.get_field("submitted").unwrap();
 
-    let query = parser.parse_query(args.rest())?;
-
-    let top_docs = searcher.search(&query, &TopDocs::with_limit(5))?;
+    let top_docs = if args.rest().trim() == "" {
+        let query = parser.parse_query("*")?;
+        searcher.search(
+            &query,
+            &TopDocs::with_limit(1).custom_score(move |_: &SegmentReader| {
+                move |_: DocId| {
+                    let mut rng = rand::thread_rng();
+                    rng.gen::<f32>()
+                }
+            }),
+        )?
+    } else {
+        let query = parser.parse_query(&format!("quote:\"{}\"", args.rest()))?;
+        searcher.search(&query, &TopDocs::with_limit(5))?
+    };
 
     let message = if let Some((score, doc_address)) = top_docs.choose(&mut rand::thread_rng()) {
         let retrieved_doc = searcher.doc(*doc_address)?;
@@ -229,7 +248,7 @@ async fn quote(ctx: &Context, msg: &Message, args: Args) -> CommandResult {
 
         let duration = start.elapsed();
 
-        if submitter != "" {
+        if !submitter.is_empty() {
             format!(
                 "{}\n\n*Submitted by {} on {} [{:.2} {:.2}ms]*",
                 quote,
