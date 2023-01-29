@@ -34,8 +34,12 @@ impl TypeMapKey for SqlitePool {
 }
 
 #[group]
-#[commands(slap, quote, quoteid)]
+#[commands(slap)]
 struct General;
+
+#[group]
+#[commands(quote, quoteid)]
+struct Quotes;
 
 #[help]
 #[individual_command_tip = "Wes þu hal.\n\n\
@@ -133,7 +137,8 @@ async fn main() {
         .unrecognised_command(unknown_command)
         .on_dispatch_error(dispatch_error)
         .help(&HELP)
-        .group(&GENERAL_GROUP);
+        .group(&GENERAL_GROUP)
+        .group(&QUOTES_GROUP);
 
     let intents = GatewayIntents::GUILD_MESSAGES
         | GatewayIntents::DIRECT_MESSAGES
