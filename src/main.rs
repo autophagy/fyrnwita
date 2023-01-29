@@ -19,6 +19,7 @@ use tantivy::collector::TopDocs;
 use tantivy::query::QueryParser;
 use tantivy::schema::*;
 use tantivy::{Index, IndexReader, ReloadPolicy};
+use time::format_description;
 
 struct Handler;
 
@@ -214,6 +215,7 @@ async fn quote(ctx: &Context, msg: &Message, args: Args) -> CommandResult {
 
     let quote = schema.get_field("quote").unwrap();
     let submitter = schema.get_field("submitter").unwrap();
+    let submitted = schema.get_field("submitted").unwrap();
 
     let query = parser.parse_query(args.rest())?;
 
@@ -223,21 +225,24 @@ async fn quote(ctx: &Context, msg: &Message, args: Args) -> CommandResult {
         let retrieved_doc = searcher.doc(*doc_address)?;
         let quote = get_str_with_default(retrieved_doc.get_first(quote), "");
         let submitter = get_str_with_default(retrieved_doc.get_first(submitter), "");
+        let submitted = get_date_with_default(retrieved_doc.get_first(submitted), "N/A");
 
         let duration = start.elapsed();
 
         if submitter != "" {
             format!(
-                "{}\n\n*Submitted by {} [{:.2} {:.2}ms]*",
+                "{}\n\n*Submitted by {} on {} [{:.2} {:.2}ms]*",
                 quote,
                 submitter,
+                submitted,
                 score,
                 duration.as_micros() as f32 / 1000.0,
             )
         } else {
             format!(
-                "{}\n\n*[{:.2} {:.2}ms]*",
+                "{}\n\n*Submitted on {} [{:.2} {:.2}ms]*",
                 quote,
+                submitted,
                 score,
                 duration.as_micros() as f32 / 1000.0,
             )
@@ -255,5 +260,16 @@ pub fn get_str_with_default<'a>(value: Option<&'a Value>, default: &'a str) -> &
         i
     } else {
         default
+    }
+}
+
+pub fn get_date_with_default<'a>(value: Option<&'a Value>, default: &'a str) -> String {
+    if let Value::Date(i) = value.unwrap() {
+        let format =
+            format_description::parse("[month repr:short] [day] [year] [hour]:[minute]:[second]")
+                .unwrap();
+        i.into_utc().format(&format).unwrap()
+    } else {
+        default.to_string()
     }
 }
