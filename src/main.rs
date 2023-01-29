@@ -219,33 +219,32 @@ async fn quote(ctx: &Context, msg: &Message, args: Args) -> CommandResult {
 
     let top_docs = searcher.search(&query, &TopDocs::with_limit(5))?;
 
-    let (score, doc_address) = top_docs.choose(&mut rand::thread_rng()).unwrap();
+    let message = if let Some((score, doc_address)) = top_docs.choose(&mut rand::thread_rng()) {
+        let retrieved_doc = searcher.doc(*doc_address)?;
+        let quote = get_str_with_default(retrieved_doc.get_first(quote), "");
+        let submitter = get_str_with_default(retrieved_doc.get_first(submitter), "");
 
-    let retrieved_doc = searcher.doc(*doc_address)?;
-    let quote = if let Value::Str(i) = retrieved_doc.get_first(quote).unwrap() {
-        i
-    } else {
-        ""
-    };
-    let submitter = if let Value::Str(i) = retrieved_doc.get_first(submitter).unwrap() {
-        i
-    } else {
-        ""
-    };
+        let duration = start.elapsed();
 
-    let duration = start.elapsed();
-
-    msg.reply(
-        &ctx.http,
         format!(
             "{}\n\n*Submitted by {} [{:.2} {:.2}ms]*",
             quote,
             submitter,
             score,
             duration.as_micros() as f32 / 1000.0,
-        ),
-    )
-    .await?;
+        )
+    } else {
+        "No quote found.".to_string()
+    };
+    msg.reply(&ctx.http, message).await?;
 
     Ok(())
+}
+
+pub fn get_str_with_default<'a>(value: Option<&'a Value>, default: &'a str) -> &'a str {
+    if let Value::Str(i) = value.unwrap() {
+        i
+    } else {
+        default
+    }
 }
