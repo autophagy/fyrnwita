@@ -34,7 +34,7 @@ impl TypeMapKey for SqlitePool {
 }
 
 #[group]
-#[commands(slap, quote)]
+#[commands(slap, quote, quoteid)]
 struct General;
 
 #[help]
@@ -182,6 +182,61 @@ struct Quote {
     quote: String,
     submitter: String,
     submitted: Option<OffsetDateTime>,
+}
+
+#[command]
+async fn quoteid(ctx: &Context, msg: &Message, args: Args) -> CommandResult {
+    let start = Instant::now();
+
+    let pool = {
+        let data_read = ctx.data.read().await;
+        data_read
+            .get::<SqlitePool>()
+            .expect("Expected an SqlitePool in TypeMap")
+            .clone()
+    };
+
+    let stmt =
+        "SELECT id, quote, submitter, submitted FROM quotes WHERE id = ? ORDER BY RANDOM() LIMIT 1";
+    let query_result = sqlx::query_as::<_, Quote>(stmt)
+        .bind(args.rest().trim())
+        .fetch_one(&pool)
+        .await;
+
+    let duration = start.elapsed();
+
+    match query_result {
+        Ok(quote) => {
+            let reply = if !quote.submitter.is_empty() {
+                format!(
+                    "[{}] {}\n\n*Submitted by {} on {} [{:.2}ms]*",
+                    quote.id,
+                    quote.quote,
+                    quote.submitter,
+                    get_date_with_default(&quote.submitted, "N/A"),
+                    duration.as_micros() as f32 / 1000.0,
+                )
+            } else {
+                format!(
+                    "[{}] {}\n\n*Submitted on {} [{:.2}ms]*",
+                    quote.id,
+                    quote.quote,
+                    get_date_with_default(&quote.submitted, "N/A"),
+                    duration.as_micros() as f32 / 1000.0,
+                )
+            };
+
+            msg.reply(&ctx.http, reply).await?;
+        }
+        Err(sqlx::Error::RowNotFound) => {
+            msg.reply(&ctx.http, "No quote found.").await?;
+        }
+        Err(_) => {
+            msg.reply(&ctx.http, "Querying error.").await?;
+        }
+    };
+
+    Ok(())
 }
 
 #[command]
