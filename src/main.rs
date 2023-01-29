@@ -1,3 +1,4 @@
+use rand::seq::SliceRandom; // 0.7.2
 use std::collections::HashSet;
 use std::env;
 
@@ -11,6 +12,13 @@ use serenity::model::channel::Message;
 use serenity::model::gateway::{GatewayIntents, Ready};
 use serenity::model::id::UserId;
 use serenity::prelude::*;
+use std::sync::Arc;
+
+use std::time::Instant;
+use tantivy::collector::TopDocs;
+use tantivy::query::QueryParser;
+use tantivy::schema::*;
+use tantivy::{Index, IndexReader, ReloadPolicy};
 
 struct Handler;
 
@@ -21,8 +29,18 @@ impl EventHandler for Handler {
     }
 }
 
+struct Queryer {
+    parser: QueryParser,
+    reader: IndexReader,
+    schema: Schema,
+}
+
+impl TypeMapKey for Queryer {
+    type Value = Arc<Queryer>;
+}
+
 #[group]
-#[commands(slap)]
+#[commands(slap, quote)]
 struct General;
 
 #[help]
@@ -82,6 +100,29 @@ async fn dispatch_error(ctx: &Context, msg: &Message, error: DispatchError, _com
 
 #[tokio::main]
 async fn main() {
+    let index_path = env::var("FW_INDEX").expect("Expected a path to Tantivy index in env");
+    let index = Index::open_in_dir(&index_path).unwrap();
+    let reader = index
+        .reader_builder()
+        .reload_policy(ReloadPolicy::OnCommit)
+        .try_into()
+        .unwrap();
+    let mut schema_builder = Schema::builder();
+
+    schema_builder.add_text_field("quote", TEXT | STORED | FAST);
+    schema_builder.add_text_field("submitter", TEXT | STORED);
+    schema_builder.add_date_field("submitted", STORED);
+
+    let schema = schema_builder.build();
+
+    let parser = QueryParser::for_index(&index, vec![schema.get_field("quote").unwrap()]);
+
+    let queryer = Queryer {
+        parser,
+        reader,
+        schema,
+    };
+
     let token = env::var("DISCORD_TOKEN").expect("Expected a token in the environment");
 
     let http = Http::new(&token);
@@ -120,6 +161,12 @@ async fn main() {
         .await
         .expect("Err creating client");
 
+    {
+        // Open the data lock in write mode, so keys can be inserted to it.
+        let mut data = client.data.write().await;
+
+        data.insert::<Queryer>(Arc::new(queryer));
+    }
     if let Err(why) = client.start().await {
         println!("Client error: {:?}", why);
     }
@@ -144,5 +191,61 @@ async fn slap(ctx: &Context, msg: &Message, args: Args) -> CommandResult {
             ),
         )
         .await?;
+    Ok(())
+}
+
+#[command]
+async fn quote(ctx: &Context, msg: &Message, args: Args) -> CommandResult {
+    let start = Instant::now();
+
+    let queryer = {
+        let data_read = ctx.data.read().await;
+        data_read
+            .get::<Queryer>()
+            .expect("Expected queryer")
+            .clone()
+    };
+
+    let parser = &queryer.parser;
+    let reader = &queryer.reader;
+    let schema = &queryer.schema;
+
+    let searcher = &reader.searcher();
+
+    let quote = schema.get_field("quote").unwrap();
+    let submitter = schema.get_field("submitter").unwrap();
+
+    let query = parser.parse_query(args.rest())?;
+
+    let top_docs = searcher.search(&query, &TopDocs::with_limit(5))?;
+
+    let (score, doc_address) = top_docs.choose(&mut rand::thread_rng()).unwrap();
+
+    let retrieved_doc = searcher.doc(*doc_address)?;
+    let quote = if let Value::Str(i) = retrieved_doc.get_first(quote).unwrap() {
+        i
+    } else {
+        ""
+    };
+    let submitter = if let Value::Str(i) = retrieved_doc.get_first(submitter).unwrap() {
+        i
+    } else {
+        ""
+    };
+
+    let duration = start.elapsed();
+
+    msg.reply(
+        &ctx.http,
+        format!(
+            "{}\n\n*Submitted by {} [{:.2} {:.2}ms]*",
+            quote,
+            submitter,
+            score,
+            duration.as_micros() as f32 / 1000.0,
+        ),
+    )
+    .await?;
+
     Ok(())
 }
