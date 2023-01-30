@@ -1,7 +1,7 @@
 mod commands;
+mod config;
 
 use std::collections::HashSet;
-use std::env;
 
 use serenity::async_trait;
 use serenity::framework::standard::macros::{group, help, hook};
@@ -100,10 +100,10 @@ async fn dispatch_error(ctx: &Context, msg: &Message, error: DispatchError, _com
 
 #[tokio::main]
 async fn main() {
-    let db_path = env::var("FW_DB").expect("Expected a path to Sqlite3 DB as $FW_DB");
+    let configuration = config::load_configuration("~/.config/fyrnwita/config.json");
 
     let opts = SqliteConnectOptions::new()
-        .filename(db_path)
+        .filename(shellexpand::tilde(&configuration.hord_path).to_string())
         .journal_mode(SqliteJournalMode::Delete);
 
     let pool = SqlitePoolOptions::new()
@@ -112,9 +112,7 @@ async fn main() {
         .await
         .unwrap();
 
-    let token = env::var("DISCORD_TOKEN").expect("Expected a token in the environment");
-
-    let http = Http::new(&token);
+    let http = Http::new(&configuration.discord_token);
 
     let (owners, _) = match http.get_current_application_info().await {
         Ok(info) => {
@@ -145,7 +143,7 @@ async fn main() {
     let intents = GatewayIntents::GUILD_MESSAGES
         | GatewayIntents::DIRECT_MESSAGES
         | GatewayIntents::MESSAGE_CONTENT;
-    let mut client = Client::builder(&token, intents)
+    let mut client = Client::builder(&configuration.discord_token, intents)
         .event_handler(Handler)
         .framework(framework)
         .await
