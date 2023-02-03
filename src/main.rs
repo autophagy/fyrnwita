@@ -9,7 +9,7 @@ use serenity::framework::standard::{
     help_commands, Args, CommandGroup, CommandResult, DispatchError, HelpOptions, StandardFramework,
 };
 use serenity::http::Http;
-use serenity::model::channel::Message;
+use serenity::model::channel::{Message, ReactionType};
 use serenity::model::gateway::{GatewayIntents, Ready};
 use serenity::model::id::UserId;
 use serenity::prelude::*;
@@ -33,6 +33,10 @@ struct SqlitePool;
 
 impl TypeMapKey for SqlitePool {
     type Value = Pool<Sqlite>;
+}
+
+impl TypeMapKey for config::Configuration {
+    type Value = config::Configuration;
 }
 
 #[group]
@@ -81,6 +85,29 @@ async fn after(_: &Context, _msg: &Message, command_name: &str, command_result: 
 #[hook]
 async fn unknown_command(_ctx: &Context, _msg: &Message, unknown_command_name: &str) {
     println!("Could not find command named '{}'", unknown_command_name);
+}
+
+#[hook]
+async fn normal_message(ctx: &Context, msg: &Message) {
+    let data_read = ctx.data.read().await;
+    let config = data_read
+        .get::<config::Configuration>()
+        .expect("Expected a Fyrnwite Configuration in TypeMap");
+    let normalized = &msg.content.to_lowercase();
+
+    for (trigger, emoji) in &config.reactions {
+        if normalized.contains(trigger) {
+            match emoji {
+                config::EmojiTypes::Emoji(c) => {
+                    msg.react(&ctx, *c).await.unwrap();
+                }
+                config::EmojiTypes::CustomEmoji(s) => {
+                    let reaction = ReactionType::try_from(s.clone()).unwrap();
+                    msg.react(&ctx, reaction).await.unwrap();
+                }
+            };
+        }
+    }
 }
 
 #[hook]
@@ -135,6 +162,7 @@ async fn main() {
         .before(before)
         .after(after)
         .unrecognised_command(unknown_command)
+        .normal_message(normal_message)
         .on_dispatch_error(dispatch_error)
         .help(&HELP)
         .group(&GENERAL_GROUP)
@@ -152,6 +180,7 @@ async fn main() {
     {
         let mut data = client.data.write().await;
         data.insert::<SqlitePool>(pool);
+        data.insert::<config::Configuration>(configuration);
     }
 
     if let Err(why) = client.start().await {

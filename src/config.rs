@@ -1,6 +1,14 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
+
+#[derive(Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum EmojiTypes {
+    Emoji(char),
+    CustomEmoji(String),
+}
 
 #[derive(Serialize, Deserialize)]
 pub struct Configuration {
@@ -8,6 +16,7 @@ pub struct Configuration {
     pub hord_path: String,
     pub expunged_message: String,
     pub admin_users: Vec<String>,
+    pub reactions: HashMap<String, EmojiTypes>,
 }
 
 fn default_configuration() -> Configuration {
@@ -16,6 +25,7 @@ fn default_configuration() -> Configuration {
         hord_path: "~/.config/fyrnwita/hord.sl3".to_string(),
         expunged_message: "Quote has been removed.".to_string(),
         admin_users: vec![],
+        reactions: HashMap::new(),
     }
 }
 
