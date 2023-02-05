@@ -10,7 +10,7 @@ use crate::SqlitePool;
 use sqlx::{Pool, Sqlite};
 
 #[derive(Debug, sqlx::FromRow)]
-struct Quote {
+pub struct Quote {
     id: i32,
     quote: String,
     submitter: String,

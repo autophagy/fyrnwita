@@ -2,6 +2,8 @@ mod commands;
 mod config;
 
 use std::collections::HashSet;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 use serenity::async_trait;
 use serenity::framework::standard::macros::{group, help, hook};
@@ -17,6 +19,8 @@ use serenity::prelude::*;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
 use sqlx::{Pool, Sqlite};
 
+use time::OffsetDateTime;
+
 use crate::commands::misc::*;
 use crate::commands::quote::*;
 
@@ -29,7 +33,7 @@ impl EventHandler for Handler {
     }
 }
 
-struct SqlitePool;
+pub struct SqlitePool;
 
 impl TypeMapKey for SqlitePool {
     type Value = Pool<Sqlite>;
@@ -39,8 +43,23 @@ impl TypeMapKey for config::Configuration {
     type Value = config::Configuration;
 }
 
+pub struct CommandCount;
+
+impl TypeMapKey for CommandCount {
+    type Value = Arc<AtomicUsize>;
+}
+
+pub struct Metadata {
+    pub start: OffsetDateTime,
+    pub version: String,
+}
+
+impl TypeMapKey for Metadata {
+    type Value = Metadata;
+}
+
 #[group]
-#[commands(slap)]
+#[commands(slap, status)]
 struct General;
 
 #[group]
@@ -66,11 +85,18 @@ async fn help(
 }
 
 #[hook]
-async fn before(_: &Context, msg: &Message, command_name: &str) -> bool {
+async fn before(ctx: &Context, msg: &Message, command_name: &str) -> bool {
     println!(
         "Got command '{}' by user '{}'",
         command_name, msg.author.name
     );
+    let command_count = {
+        let read = ctx.data.read().await;
+        read.get::<CommandCount>()
+            .expect("Expected CommandCount in TypeMap.")
+            .clone()
+    };
+    command_count.fetch_add(1, Ordering::SeqCst);
     true
 }
 
@@ -127,6 +153,8 @@ async fn dispatch_error(ctx: &Context, msg: &Message, error: DispatchError, _com
 
 #[tokio::main]
 async fn main() {
+    let start = OffsetDateTime::now_utc();
+    let version = env!("CARGO_PKG_VERSION").to_string();
     let configuration = config::load_configuration("~/.config/fyrnwita/config.json");
 
     let opts = SqliteConnectOptions::new()
@@ -181,6 +209,8 @@ async fn main() {
         let mut data = client.data.write().await;
         data.insert::<SqlitePool>(pool);
         data.insert::<config::Configuration>(configuration);
+        data.insert::<CommandCount>(Arc::new(AtomicUsize::new(0)));
+        data.insert::<Metadata>(Metadata { start, version });
     }
 
     if let Err(why) = client.start().await {
