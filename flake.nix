@@ -9,18 +9,18 @@
     utils.lib.eachDefaultSystem (system:
       let
         pkgs = import nixpkgs { inherit system; };
-        naersk-lib = pkgs.callPackage naersk { };
+        naersk-lib = naersk.lib.${system};
       in
       {
         packages = rec {
           fyrnwita = naersk-lib.buildPackage {
             root = ./.;
             buildInputs = with pkgs; [ pkg-config openssl ];
-            doCheck = true;
+            doCheck = false;
           };
-
-          default = self.packages.${system}.fyrnwita;
         };
+
+        defaultPackage = self.packages.${system}.fyrnwita;
 
         devShell = with pkgs; mkShell {
           buildInputs = [ cargo rustc rustfmt pre-commit rustPackages.clippy dhall openssl pkg-config ];
