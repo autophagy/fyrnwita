@@ -2,6 +2,7 @@ mod commands;
 mod config;
 
 use std::collections::HashSet;
+use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
@@ -151,6 +152,44 @@ async fn dispatch_error(ctx: &Context, msg: &Message, error: DispatchError, _com
     }
 }
 
+async fn initialize_sqlite(path: &Path) -> Result<(), sqlx::Error> {
+    let opts = SqliteConnectOptions::new()
+        .filename(path)
+        .journal_mode(SqliteJournalMode::Delete)
+        .create_if_missing(true);
+
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(opts)
+        .await
+        .unwrap();
+
+    let mut tx = pool.begin().await?;
+
+    let queries = vec![
+        "CREATE TABLE quotes(id INTEGER primary key, quote text not null, submitter text, submitted datetime)",
+        "CREATE VIRTUAL TABLE quotes_fts using fts5(quote, content=quotes, content_rowid=id);",
+        "CREATE TRIGGER quotes_ai AFTER INSERT ON quotes BEGIN
+            INSERT INTO quotes_fts(rowid, quote) VALUES (new.id, new.quote);
+        END",
+        "CREATE TRIGGER quotes_ad AFTER DELETE ON quotes BEGIN
+            INSERT INTO quotes_fts(quotes_fts, rowid, quote) VALUES('delete', old.id, old.quote);
+        END",
+        "CREATE TRIGGER quotes_au AFTER UPDATE ON quotes BEGIN
+            INSERT INTO quotes_fts(quotes_fts, rowid, quote) VALUES('delete', old.id, old.quote);
+            INSERT INTO quotes_fts(rowid, quote) VALUES (new.id, new.quote);
+        END",
+    ];
+
+    for query in queries.into_iter() {
+        sqlx::query(query).execute(&mut tx).await?;
+    }
+
+    tx.commit().await?;
+
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() {
     let start = OffsetDateTime::now_utc();
@@ -160,6 +199,13 @@ async fn main() {
     let args: Vec<String> = std::env::args().collect();
     let config_path = &args[1];
     let configuration = config::load_configuration(config_path);
+
+    let hord_path = Path::new(&configuration.hord_path);
+    if !hord_path.exists() {
+        initialize_sqlite(hord_path)
+            .await
+            .expect("Unable to initialize SQLite DB");
+    }
 
     let opts = SqliteConnectOptions::new()
         .filename(&configuration.hord_path)
