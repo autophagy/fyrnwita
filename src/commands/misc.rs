@@ -66,14 +66,11 @@ Bot Status:
 ```
 Quotes  :: {}
 Queries :: {}
-Uptime  :: {}
+Uptime  :: {}d.{}h.{}m
 Version :: {}
 ```
             ",
-            r.0,
-            command_count,
-            format!("{}d.{}h.{}m", uptime_days, uptime_hours, uptime_mins),
-            metadata.version,
+            r.0, command_count, uptime_days, uptime_hours, uptime_mins, metadata.version,
         ),
     )
     .await?;

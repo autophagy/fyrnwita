@@ -103,14 +103,14 @@ async fn before(ctx: &Context, msg: &Message, command_name: &str) -> bool {
 #[hook]
 async fn after(_: &Context, _msg: &Message, command_name: &str, command_result: CommandResult) {
     match command_result {
-        Ok(()) => println!("Processed command '{}'", command_name),
-        Err(why) => println!("Command '{}' returned error {:?}", command_name, why),
+        Ok(()) => println!("Processed command '{command_name}'"),
+        Err(why) => println!("Command '{command_name}' returned error {why:?}"),
     }
 }
 
 #[hook]
 async fn unknown_command(_ctx: &Context, _msg: &Message, unknown_command_name: &str) {
-    println!("Could not find command named '{}'", unknown_command_name);
+    println!("Could not find command named '{unknown_command_name}'");
 }
 
 #[hook]
@@ -159,7 +159,7 @@ async fn main() {
         std::env::var("FYRNWITA_DISCORD_TOKEN").expect("Expected FYRNWITA_DISCORD_TOKEN");
     let args: Vec<String> = std::env::args().collect();
     let config_path = &args[1];
-    let configuration = config::load_configuration(&config_path);
+    let configuration = config::load_configuration(config_path);
 
     let opts = SqliteConnectOptions::new()
         .filename(&configuration.hord_path)
@@ -183,10 +183,10 @@ async fn main() {
             }
             match http.get_current_user().await {
                 Ok(bot_id) => (owners, bot_id.id),
-                Err(why) => panic!("Could not access the bot id: {:?}", why),
+                Err(why) => panic!("Could not access the bot id: {why:?}"),
             }
         }
-        Err(why) => panic!("Could not access application info: {:?}", why),
+        Err(why) => panic!("Could not access application info: {why:?}"),
     };
 
     let framework = StandardFramework::new()
@@ -218,6 +218,6 @@ async fn main() {
     }
 
     if let Err(why) = client.start().await {
-        println!("Client error: {:?}", why);
+        println!("Client error: {why:?}");
     }
 }
