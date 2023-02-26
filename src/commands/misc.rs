@@ -7,8 +7,6 @@ use serenity::prelude::*;
 
 use time::{Duration, OffsetDateTime};
 
-use indoc::indoc;
-
 use crate::CommandCount;
 use crate::Metadata;
 use crate::SqlitePool;
@@ -63,15 +61,15 @@ async fn status(ctx: &Context, msg: &Message, _: Args) -> CommandResult {
     msg.reply(
         &ctx.http,
         format!(
-            indoc! {"
-            Bot Status:
-            ```
-            Quotes  :: {}
-            Queries :: {}
-            Uptime  :: {}
-            Version :: {}
-            ```
-            "},
+            "
+Bot Status:
+```
+Quotes  :: {}
+Queries :: {}
+Uptime  :: {}
+Version :: {}
+```
+            ",
             r.0,
             command_count,
             format!("{}d.{}h.{}m", uptime_days, uptime_hours, uptime_mins),

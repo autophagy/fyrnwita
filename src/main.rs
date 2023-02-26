@@ -155,10 +155,14 @@ async fn dispatch_error(ctx: &Context, msg: &Message, error: DispatchError, _com
 async fn main() {
     let start = OffsetDateTime::now_utc();
     let version = env!("CARGO_PKG_VERSION").to_string();
-    let configuration = config::load_configuration("~/.config/fyrnwita/config.json");
+    let discord_token =
+        std::env::var("FYRNWITA_DISCORD_TOKEN").expect("Expected FYRNWITA_DISCORD_TOKEN");
+    let args: Vec<String> = std::env::args().collect();
+    let config_path = &args[1];
+    let configuration = config::load_configuration(&config_path);
 
     let opts = SqliteConnectOptions::new()
-        .filename(shellexpand::tilde(&configuration.hord_path).to_string())
+        .filename(&configuration.hord_path)
         .journal_mode(SqliteJournalMode::Delete);
 
     let pool = SqlitePoolOptions::new()
@@ -167,7 +171,7 @@ async fn main() {
         .await
         .unwrap();
 
-    let http = Http::new(&configuration.discord_token);
+    let http = Http::new(&discord_token);
 
     let (owners, _) = match http.get_current_application_info().await {
         Ok(info) => {
@@ -199,7 +203,7 @@ async fn main() {
     let intents = GatewayIntents::GUILD_MESSAGES
         | GatewayIntents::DIRECT_MESSAGES
         | GatewayIntents::MESSAGE_CONTENT;
-    let mut client = Client::builder(&configuration.discord_token, intents)
+    let mut client = Client::builder(&discord_token, intents)
         .event_handler(Handler)
         .framework(framework)
         .await
